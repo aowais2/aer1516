@@ -1,4 +1,4 @@
-## Broad concepts in this file
+## Assignment 3
 
 This assignmement is for Full frontier-based exploration pipeline from perception to action.
 
