@@ -340,9 +340,9 @@ def select_goal_nearest(frontier_regions, occ_grid, state):
     robot_col = int(state.robot_x / CELL_SIZE)
     robot_rc = (robot_row, robot_col)
 
-    # Find the nearest frontier by Euclidean distance.
+    # Find the nearest frontier by path cost.
     best_goal = None
-    best_dist = float('inf')
+    best_cost = float('inf')
 
     for fr in frontier_regions:
         # Skip blacklisted goals
@@ -378,9 +378,16 @@ def select_goal_nearest(frontier_regions, occ_grid, state):
             continue
 
         # Calculate Euclidean distance
-        dist = math.sqrt((robot_row - goal[0])**2 + (robot_col - goal[1])**2)
-        if dist < best_dist:
-            best_dist = dist
+        # dist = math.sqrt((robot_row - goal[0])**2 + (robot_col - goal[1])**2)
+        # if dist < best_dist:
+        #     best_dist = dist
+        #     best_goal = goal
+        path, cost = plan_path(occ_grid, robot_rc, goal)
+        if path is None:
+            continue
+
+        if cost < best_cost:
+            best_cost = cost
             best_goal = goal
 
     return best_goal
@@ -427,11 +434,9 @@ def select_goal_custom(frontier_regions, occ_grid, state):
     # state.robot_x/y, state.blacklisted_goals, occ_grid, etc.
     #
     # Describe your strategy briefly:
-    # Strategy: I will implement a cost-utility approach that scores each frontier region
-    # where I prefer larger frontiers that are closer to the robot. The score will be calculated as
-    # frontier_size / (path_cost + epsilon). Most of the code is already in place from 
-    # Part 2a, so I will modify the scoring mechanism to incorporate frontier size and 
-    # path cost instead of just distance.
+    # Strategy: This strategy prioritizes the nearest reachable frontier while 
+    # adding a logarithmic bonus for larger clusters, ensuring the robot doesn't 
+    # ignore massive unknown areas for tiny, insignificant gaps.
 
     if not frontier_regions:
         return None
@@ -441,7 +446,7 @@ def select_goal_custom(frontier_regions, occ_grid, state):
     robot_rc = (robot_row, robot_col)
 
     best_goal = None
-    best_score = -float('inf')
+    best_score = float('inf')
 
     for fr in frontier_regions:
         # Skip blacklisted goals
@@ -450,36 +455,46 @@ def select_goal_custom(frontier_regions, occ_grid, state):
 
         goal = fr.centroid
 
-        # Snap centroid to nearest FREE cell if it's not FREE already
         if not occ_grid.is_free(goal[0], goal[1]):
-            queue = deque([(goal[0], goal[1], 0)])
-            visited = {goal}
-            snapped = False
-
-            while queue and not snapped:
-                r, c, dist = queue.popleft()
-                if dist > 3:
-                    break
-
-                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    nr, nc = r + dr, c + dc
-                    if (nr, nc) not in visited and occ_grid.is_in_bounds(nr, nc):
-                        visited.add((nr, nc))
-                        if occ_grid.is_free(nr, nc):
-                            goal = (nr, nc)
-                            snapped = True
-                            break
-                        queue.append((nr, nc, dist + 1))
+            # Find the cell in this cluster closest to the robot
+            goal = min(fr.cells, key=lambda c: abs(c[0]-robot_row) + abs(c[1]-robot_col))
+            
+            # If that cell still isn't 'FREE' (e.g. it's UNKNOWN), do a SMALL snap
+            if not occ_grid.is_free(goal[0], goal[1]):
+                queue = deque([goal])
+                visited = {goal}
+                snapped = None
+                
+                # Small radius (5) is enough if we start from an actual frontier cell
+                while queue:
+                    r, c = queue.popleft()
+                    if occ_grid.is_free(r, c):
+                        snapped = (r, c)
+                        break
+                    if abs(r - goal[0]) + abs(c - goal[1]) > 5:
+                        continue
+                    for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                        nr, nc = r + dr, c + dc
+                        if (nr, nc) not in visited and occ_grid.is_in_bounds(nr, nc):
+                            visited.add((nr, nc))
+                            queue.append((nr, nc))
+                if snapped:
+                    goal = snapped
+                else:
+                    continue
 
         if goal in state.blacklisted_goals:
             continue
 
         path, cost = plan_path(occ_grid, robot_rc, goal)
         if path is None:
+            # Important: blacklist unreachable cave walls to save time next loop
+            state.blacklisted_goals.add(fr.centroid)
             continue
 
-        score = fr.size / (cost + 1e-6)
-        if score > best_score:
+        score = cost - (20 * math.log(fr.size + 1))
+        
+        if score < best_score:
             best_score = score
             best_goal = goal
 
